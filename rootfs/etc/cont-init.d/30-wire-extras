@@ -1,45 +1,77 @@
 #!/command/with-contenv bash
 # Wire channel tokens + OAuth credentials from env into openclaw state.
 # Runs after 20-setup-openclaw (config exists) and before openclaw service starts.
+# MUST NOT fail the container: every branch tolerates missing/invalid input.
 source /etc/s6-overlay/lib/env-utils.sh
 
-set -e
-source_env_prefix OPENCLAW_
-source_env_prefix TELEGRAM_
-source_env_prefix CODEX_
+source_env_prefix OPENCLAW_ || true
+source_env_prefix TELEGRAM_ || true
+source_env_prefix CODEX_ || true
 
 CONFIG_FILE="${OPENCLAW_STATE_DIR:-/data/.openclaw}/openclaw.json"
 OC_HOME="/home/openclaw"
 
 inject_telegram_token() {
-  [ -z "$TELEGRAM_BOT_TOKEN" ] && { echo "[wire-extras] TELEGRAM_BOT_TOKEN not set, skipping"; return 0; }
-  [ ! -f "$CONFIG_FILE" ] && { echo "[wire-extras] config missing at $CONFIG_FILE, skipping telegram"; return 0; }
+  if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+    echo "[wire-extras] TELEGRAM_BOT_TOKEN not set, skipping"
+    return 0
+  fi
+  if [ ! -f "$CONFIG_FILE" ]; then
+    echo "[wire-extras] config missing at $CONFIG_FILE, skipping telegram"
+    return 0
+  fi
 
   echo "[wire-extras] Injecting channels.telegram.botToken"
-  jq --arg t "$TELEGRAM_BOT_TOKEN" \
+  if jq --arg t "$TELEGRAM_BOT_TOKEN" \
     '.channels.telegram.enabled = true
      | .channels.telegram.botToken = $t' \
-    "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-  chown openclaw:openclaw "$CONFIG_FILE"
+    "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" 2>/dev/null; then
+    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    chown openclaw:openclaw "$CONFIG_FILE" || true
+    echo "[wire-extras] telegram token injected"
+  else
+    echo "[wire-extras] ERROR: jq failed on config; skipping telegram"
+    rm -f "${CONFIG_FILE}.tmp"
+  fi
 }
 
 install_codex_auth() {
-  [ -z "$CODEX_AUTH_B64" ] && { echo "[wire-extras] CODEX_AUTH_B64 not set, skipping codex auth"; return 0; }
-
-  echo "[wire-extras] Installing codex auth.json"
-  install -d -m 0700 -o openclaw -g openclaw "$OC_HOME/.codex"
-  echo "$CODEX_AUTH_B64" | base64 -d > "$OC_HOME/.codex/auth.json"
-  chown openclaw:openclaw "$OC_HOME/.codex/auth.json"
-  chmod 0600 "$OC_HOME/.codex/auth.json"
-
-  if ! jq -e '.tokens.access_token' "$OC_HOME/.codex/auth.json" >/dev/null 2>&1; then
-    echo "[wire-extras] WARNING: codex auth.json has no access_token; check CODEX_AUTH_B64"
-  else
-    echo "[wire-extras] codex auth.json installed"
+  if [ -z "$CODEX_AUTH_B64" ]; then
+    echo "[wire-extras] CODEX_AUTH_B64 not set, skipping codex auth"
+    return 0
   fi
+
+  echo "[wire-extras] Installing codex auth.json (b64 size=${#CODEX_AUTH_B64})"
+  install -d -m 0700 -o openclaw -g openclaw "$OC_HOME/.codex" 2>/dev/null || mkdir -p "$OC_HOME/.codex"
+
+  local tmp="$OC_HOME/.codex/auth.json.tmp"
+  # Strip whitespace, tolerate wrapping/corruption
+  local stripped
+  stripped=$(printf '%s' "$CODEX_AUTH_B64" | tr -d '[:space:]')
+  if printf '%s' "$stripped" | base64 -d > "$tmp" 2>/dev/null; then
+    :
+  elif printf '%s' "$stripped" | base64 --decode > "$tmp" 2>/dev/null; then
+    :
+  else
+    echo "[wire-extras] WARNING: base64 decode failed; skipping codex auth"
+    rm -f "$tmp"
+    return 0
+  fi
+
+  if ! jq -e '.tokens.access_token' "$tmp" >/dev/null 2>&1; then
+    echo "[wire-extras] WARNING: decoded codex auth has no access_token; skipping"
+    rm -f "$tmp"
+    return 0
+  fi
+
+  mv "$tmp" "$OC_HOME/.codex/auth.json"
+  chown openclaw:openclaw "$OC_HOME/.codex/auth.json" 2>/dev/null || true
+  chmod 0600 "$OC_HOME/.codex/auth.json"
+  echo "[wire-extras] codex auth.json installed"
 }
 
 inject_telegram_token
 install_codex_auth
 
 echo "[wire-extras] Done"
+exit 0
