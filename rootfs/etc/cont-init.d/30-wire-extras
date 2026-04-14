@@ -7,6 +7,26 @@ source /etc/s6-overlay/lib/env-utils.sh
 source_env_prefix OPENCLAW_ || true
 source_env_prefix TELEGRAM_ || true
 source_env_prefix CODEX_ || true
+source_env_prefix GITHUB_ || true
+source_env_prefix GH_ || true
+source_env_prefix TAVILY_ || true
+source_env_prefix XAI_ || true
+source_env_prefix BRAVE_ || true
+source_env_prefix EXA_ || true
+
+# Forward specific API-key envs into OPENCLAW_ dir so the openclaw service
+# (runs with with_env_prefix OPENCLAW_) can see them.
+forward_to_openclaw() {
+  local v
+  for v in GITHUB_TOKEN GH_TOKEN TAVILY_API_KEY XAI_API_KEY BRAVE_API_KEY EXA_API_KEY; do
+    if [ -n "${!v}" ]; then
+      echo "${!v}" > "/run/s6/container_environment/OPENCLAW_/$v"
+      chmod 600 "/run/s6/container_environment/OPENCLAW_/$v" 2>/dev/null || true
+      echo "[wire-extras] forwarded $v to openclaw env"
+    fi
+  done
+}
+forward_to_openclaw
 
 CONFIG_FILE="${OPENCLAW_STATE_DIR:-/data/.openclaw}/openclaw.json"
 OC_HOME="/home/openclaw"
