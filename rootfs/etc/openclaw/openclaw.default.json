@@ -68,8 +68,22 @@
     "agents": {
         "defaults": {
             "model": {
-                "primary": "gradient/openai-gpt-oss-120b"
+                "primary": "openai-codex/gpt-5.4"
+            },
+            "models": {
+                "openai-codex/gpt-5.4": {
+                    "params": {
+                        "reasoning": { "effort": "high" }
+                    }
+                }
             }
+        }
+    },
+    "channels": {
+        "telegram": {
+            "enabled": true,
+            "dmPolicy": "allowlist",
+            "allowFrom": ["282088490"]
         }
     },
     "tools": {
